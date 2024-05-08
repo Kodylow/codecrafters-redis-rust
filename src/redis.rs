@@ -1,3 +1,5 @@
+use std::fmt::{Display, Formatter};
+
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
@@ -7,13 +9,19 @@ use tracing::info;
 pub enum RedisCommand {
     Ping,
     Pong,
-    // Add other commands here
 }
 
-// Implement parsing from string to RedisCommand
+impl Display for RedisCommand {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RedisCommand::Ping => write!(f, "PING"),
+            RedisCommand::Pong => write!(f, "PONG"),
+        }
+    }
+}
+
 impl RedisCommand {
     pub fn from_buffer(buffer: &[u8]) -> Result<Self, anyhow::Error> {
-        // Assuming the buffer is a valid UTF-8 string and the command starts after the first line break
         let buffer_str = String::from_utf8(buffer.to_vec())?;
         let lines: Vec<&str> = buffer_str.split('\n').collect();
         if lines.len() < 3 {
@@ -29,7 +37,6 @@ impl RedisCommand {
     }
 }
 
-// Struct for Redis command responses
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RedisCommandResponse {
     pub message: String,
