@@ -19,14 +19,17 @@ use crate::{
 /// A Redis server implementation.
 #[derive(Debug, Clone)]
 pub struct Redis {
+    address: String,
     store: Arc<Mutex<BTreeMap<String, (String, Option<u64>)>>>,
     expiries: Arc<Mutex<BinaryHeap<Reverse<(u64, String)>>>>,
 }
 
 impl Redis {
     /// Creates a new Redis server.
-    pub fn new() -> Self {
+    pub fn new(host: String, port: String) -> Self {
+        let address = format!("{}:{}", host, port);
         Redis {
+            address,
             store: Arc::new(Mutex::new(BTreeMap::new())),
             expiries: Arc::new(Mutex::new(BinaryHeap::new())),
         }
@@ -34,10 +37,10 @@ impl Redis {
 
     /// Starts the Redis server.
     /// Handles incoming connections and processes commands.
-    pub async fn serve(self, address: &str) -> anyhow::Result<()> {
+    pub async fn serve(self) -> anyhow::Result<()> {
         self.clone().start_expiry_checker().await;
-        let listener = TcpListener::bind(address).await?;
-        info!("Redis Server listening on {}", address);
+        let listener = TcpListener::bind(&self.address).await?;
+        info!("Redis Server listening on {}", self.address);
         loop {
             let (stream, _) = listener.accept().await?;
             let self_clone = self.clone();
