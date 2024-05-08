@@ -25,7 +25,7 @@ async fn handle_client(mut stream: TcpStream) -> anyhow::Result<()> {
         if n == 0 {
             break;
         }
-        let command = RedisCommand::from_buffer(&buffer)?;
+        let command = RedisCommand::parse(&buffer)?;
         info!("Received command: {}", command);
         let response = RedisCommandHandler::handle_command(command);
         stream.write_all(response.message.as_bytes()).await?;
