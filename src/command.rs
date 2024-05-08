@@ -1,9 +1,12 @@
 use std::fmt::{Display, Formatter};
 
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-// Enum for Redis commands
+use crate::utils::millis_to_timestamp_from_now;
+
+/// Enum for supportedRedis commands
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RedisCommand {
@@ -33,121 +36,122 @@ impl Display for RedisCommand {
 }
 
 impl RedisCommand {
-    // Helper function to extract the next line with a specific prefix
+    /// Helper function to extract the next line with a specific prefix
     fn extract_line<'a>(
         lines: &mut impl Iterator<Item = &'a str>,
         prefix: char,
     ) -> Result<&'a str, anyhow::Error> {
-        lines
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("Invalid protocol format"))
-            .and_then(|line| {
-                if line.starts_with(prefix) {
-                    Ok(line.trim_start_matches(prefix))
-                } else {
-                    Err(anyhow::anyhow!(
-                        "Expected line to start with '{}', found: {}",
-                        prefix,
-                        line
-                    ))
-                }
+        let line = lines.next().context("Invalid protocol format")?;
+        line.starts_with(prefix)
+            .then(|| line.trim_start_matches(prefix))
+            .ok_or_else(|| {
+                anyhow::anyhow!("Expected line to start with '{}', found: {}", prefix, line)
             })
     }
-    pub fn parse(buffer: &[u8]) -> Result<Self, anyhow::Error> {
-        let buffer_str = String::from_utf8(buffer.to_vec())?;
-        let lines = buffer_str.split("\r\n");
-        let mut lines = lines.filter(|line| !line.is_empty());
 
-        let array_length_str = RedisCommand::extract_line(&mut lines, '*')?;
+    /// Parses a Redis command into my RedisCommand enum.
+    pub fn parse(buffer: &[u8]) -> Result<Self, anyhow::Error> {
+        let buffer_str = std::str::from_utf8(buffer)?;
+        let mut lines = buffer_str.split("\r\n").filter(|line| !line.is_empty());
+
+        // Parse the array length for the command and check if it's valid
+        let array_length_str = Self::extract_line(&mut lines, '*')?;
         let array_length = array_length_str
             .parse::<usize>()
-            .map_err(|_| anyhow::anyhow!("Invalid array length"))?;
+            .context("Invalid array length")?;
 
         if array_length < 1 {
-            return Err(anyhow::anyhow!(
-                "Command array must have at least one element"
-            ));
+            anyhow::bail!("Command array must have at least one element");
         }
 
-        let _command_length = RedisCommand::extract_line(&mut lines, '$')?;
-        let command = lines
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("Command not found"))?
-            .to_lowercase();
+        // Parse the command and extract the arguments
+        let _command_length = Self::extract_line(&mut lines, '$')?;
+        let command = lines.next().context("Command not found")?.to_lowercase();
 
-        info!("Parsed command: {:?}", command);
+        info!("Parsed command: {}", command);
 
         match command.as_str() {
             "ping" => Ok(RedisCommand::Ping),
             "pong" => Ok(RedisCommand::Pong),
-            "echo" => {
-                if array_length < 2 {
-                    return Err(anyhow::anyhow!("ECHO command requires an argument"));
-                }
-                let _arg_length = RedisCommand::extract_line(&mut lines, '$')?;
-                let argument = lines
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("Argument not found"))?;
-                Ok(RedisCommand::Echo(argument.to_string()))
-            }
-            "set" => RedisCommand::parse_set_command(&mut lines, array_length),
+            "echo" => Self::handle_echo_command(&mut lines, array_length),
+            "set" => Self::parse_set_command(&mut lines, array_length),
             "get" => {
                 if array_length < 2 {
-                    return Err(anyhow::anyhow!("GET command requires one argument"));
+                    anyhow::bail!("GET command requires one argument");
                 }
-                let _key_length = RedisCommand::extract_line(&mut lines, '$')?;
-                let key = lines
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("Key not found"))?;
+                let _key_length = Self::extract_line(&mut lines, '$')?;
+                let key = lines.next().context("Key not found")?;
                 Ok(RedisCommand::Get(key.to_string()))
             }
             _ => Err(anyhow::anyhow!("Unknown Redis command")),
         }
     }
 
+    /// Handles an ECHO command.
+    pub fn handle_echo_command<'a>(
+        lines: &mut impl Iterator<Item = &'a str>,
+        array_length: usize,
+    ) -> Result<Self, anyhow::Error> {
+        if array_length < 2 {
+            anyhow::bail!("ECHO command requires an argument");
+        }
+        let _arg_length = Self::extract_line(lines, '$')?;
+        let argument = lines.next().context("Argument not found")?;
+        Ok(RedisCommand::Echo(argument.to_string()))
+    }
+
+    /// Parses a SET command.
+    /// Parses the key, value and optional expiry and returns a RedisCommand.
     pub fn parse_set_command<'a>(
         lines: &mut impl Iterator<Item = &'a str>,
         array_length: usize,
     ) -> Result<Self, anyhow::Error> {
         if array_length < 3 {
-            return Err(anyhow::anyhow!(
-                "SET command requires at least two arguments"
-            ));
+            anyhow::bail!("SET command requires at least two arguments");
         }
-        let _key_length = RedisCommand::extract_line(lines, '$')?;
-        let key = lines
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("Key not found"))?;
-        let _value_length = RedisCommand::extract_line(lines, '$')?;
-        let value = lines
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("Value not found"))?;
+
+        let key = Self::parse_argument(lines, "Key")?;
+        let value = Self::parse_argument(lines, "Value")?;
 
         let expiry = if array_length == 5 {
-            let _expiry_prefix_length = RedisCommand::extract_line(lines, '$')?;
-            let expiry_prefix = lines
-                .next()
-                .ok_or_else(|| anyhow::anyhow!("Expiry prefix not found"))?;
-            info!("Expiry prefix: {}", expiry_prefix);
-            let _expiry_value_length = RedisCommand::extract_line(lines, '$')?;
-            let expiry_str = lines
-                .next()
-                .ok_or_else(|| anyhow::anyhow!("Expiry value not found"))?;
-            info!("Expiry value: {}", expiry_str);
-            Some(
-                expiry_str
-                    .parse::<u64>()
-                    .map_err(|_| anyhow::anyhow!("Invalid expiry format"))?,
-            )
+            Some(Self::parse_expiry(lines)?)
         } else {
             None
         };
+        Ok(RedisCommand::Set(key, value, expiry))
+    }
 
-        Ok(RedisCommand::Set(
-            key.to_string(),
-            value.to_string(),
-            expiry,
-        ))
+    /// Helper function to parse an argument from a redis command.
+    fn parse_argument<'a>(
+        lines: &mut impl Iterator<Item = &'a str>,
+        name: &str,
+    ) -> Result<String, anyhow::Error> {
+        let _length = Self::extract_line(lines, '$')?;
+        lines
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("{} not found", name))
+            .map(String::from)
+    }
+
+    /// Parses an expiry from a redis command.
+    /// Parses the expiry prefix, value and returns the expiry in milliseconds from now.
+    fn parse_expiry<'a>(lines: &mut impl Iterator<Item = &'a str>) -> Result<u64, anyhow::Error> {
+        let _expiry_prefix_length = Self::extract_line(lines, '$')?;
+        let expiry_prefix = lines
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("Expiry prefix not found"))?;
+        info!("Expiry prefix: {}", expiry_prefix);
+
+        let _expiry_value_length = Self::extract_line(lines, '$')?;
+        let expiry_str = lines
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("Expiry value not found"))?;
+        info!("Expiry value: {}", expiry_str);
+
+        let expiry = expiry_str
+            .parse::<u64>()
+            .map_err(|_| anyhow::anyhow!("Invalid expiry format"))?;
+        millis_to_timestamp_from_now(expiry)
     }
 }
 
@@ -160,6 +164,18 @@ impl RedisCommandResponse {
     pub fn new(message: String) -> Self {
         RedisCommandResponse {
             message: format!("+{}\r\n", message),
+        }
+    }
+
+    pub fn null() -> Self {
+        RedisCommandResponse {
+            message: "$-1\r\n".to_string(),
+        }
+    }
+
+    pub fn _error(message: String) -> Self {
+        RedisCommandResponse {
+            message: format!("-{}\r\n", message),
         }
     }
 }

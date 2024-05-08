@@ -1,5 +1,6 @@
 mod command;
 mod redis;
+mod utils;
 
 use tracing::Level;
 use tracing_subscriber::fmt::Subscriber;
