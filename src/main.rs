@@ -1,3 +1,4 @@
+mod command;
 mod redis;
 
 use tracing::Level;

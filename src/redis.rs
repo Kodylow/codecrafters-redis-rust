@@ -1,158 +1,79 @@
 use std::{
-    collections::BTreeMap,
-    fmt::{Display, Formatter},
+    cmp::Reverse,
+    collections::{BTreeMap, BinaryHeap},
     sync::Arc,
+    time::Duration,
 };
-
-use serde::{Deserialize, Serialize};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     sync::Mutex,
+    time::Instant,
 };
 use tracing::info;
 
-// Enum for Redis commands
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum RedisCommand {
-    Ping,
-    Pong,
-    Echo(String),
-    Get(String),
-    Set(String, String),
-}
+use crate::command::{RedisCommand, RedisCommandResponse};
 
-impl Display for RedisCommand {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            RedisCommand::Ping => write!(f, "PING"),
-            RedisCommand::Pong => write!(f, "PONG"),
-            RedisCommand::Echo(s) => write!(f, "ECHO {}", s),
-            RedisCommand::Get(s) => write!(f, "GET {}", s),
-            RedisCommand::Set(k, v) => write!(f, "SET {} {}", k, v),
-        }
-    }
-}
-
-impl RedisCommand {
-    pub fn parse(buffer: &[u8]) -> Result<Self, anyhow::Error> {
-        let buffer_str = String::from_utf8(buffer.to_vec())?;
-        let mut lines = buffer_str.split("\r\n").filter(|line| !line.is_empty());
-
-        // Helper function to extract the next line with a specific prefix
-        fn extract_line<'a>(
-            lines: &mut impl Iterator<Item = &'a str>,
-            prefix: char,
-        ) -> Result<&'a str, anyhow::Error> {
-            lines
-                .next()
-                .ok_or_else(|| anyhow::anyhow!("Invalid protocol format"))
-                .and_then(|line| {
-                    if line.starts_with(prefix) {
-                        Ok(line.trim_start_matches(prefix))
-                    } else {
-                        Err(anyhow::anyhow!(
-                            "Expected line to start with '{}', found: {}",
-                            prefix,
-                            line
-                        ))
-                    }
-                })
-        }
-
-        let array_length_str = extract_line(&mut lines, '*')?;
-        let array_length = array_length_str
-            .parse::<usize>()
-            .map_err(|_| anyhow::anyhow!("Invalid array length"))?;
-
-        if array_length < 1 {
-            return Err(anyhow::anyhow!(
-                "Command array must have at least one element"
-            ));
-        }
-
-        let _command_length = extract_line(&mut lines, '$')?;
-        let command = lines
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("Command not found"))?
-            .to_lowercase();
-
-        match command.as_str() {
-            "ping" => Ok(RedisCommand::Ping),
-            "pong" => Ok(RedisCommand::Pong),
-            "echo" => {
-                if array_length < 2 {
-                    return Err(anyhow::anyhow!("ECHO command requires an argument"));
-                }
-                let _arg_length = extract_line(&mut lines, '$')?;
-                let argument = lines
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("Argument not found"))?;
-                Ok(RedisCommand::Echo(argument.to_string()))
-            }
-            "set" => {
-                if array_length < 3 {
-                    return Err(anyhow::anyhow!("SET command requires two arguments"));
-                }
-                let _key_length = extract_line(&mut lines, '$')?;
-                let key = lines
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("Key not found"))?;
-                let _value_length = extract_line(&mut lines, '$')?;
-                let value = lines
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("Value not found"))?;
-                Ok(RedisCommand::Set(key.to_string(), value.to_string()))
-            }
-            "get" => {
-                if array_length < 2 {
-                    return Err(anyhow::anyhow!("GET command requires one argument"));
-                }
-                let _key_length = extract_line(&mut lines, '$')?;
-                let key = lines
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("Key not found"))?;
-                Ok(RedisCommand::Get(key.to_string()))
-            }
-            _ => Err(anyhow::anyhow!("Unknown Redis command")),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct RedisCommandResponse {
-    pub message: String,
-}
-
-impl RedisCommandResponse {
-    pub fn new(message: String) -> Self {
-        RedisCommandResponse {
-            message: format!("+{}\r\n", message),
-        }
-    }
-}
-
-// Command handler to process commands and generate responses
 #[derive(Debug, Clone)]
 pub struct Redis {
-    store: Arc<Mutex<BTreeMap<String, String>>>,
+    store: Arc<Mutex<BTreeMap<String, (String, Option<u64>)>>>,
+    expiries: Arc<Mutex<BinaryHeap<Reverse<(Instant, String)>>>>,
 }
 
 impl Redis {
     pub fn new() -> Self {
         Redis {
             store: Arc::new(Mutex::new(BTreeMap::new())),
+            expiries: Arc::new(Mutex::new(BinaryHeap::new())),
         }
     }
 
     pub async fn serve(self, address: &str) -> anyhow::Result<()> {
+        self.clone().start_expiry_checker().await;
         let listener = TcpListener::bind(address).await?;
         info!("Redis Server listening on {}", address);
         loop {
             let (stream, _) = listener.accept().await?;
-            tokio::spawn(self.clone().process_client_req(stream));
+            let self_clone = self.clone();
+            tokio::spawn(async move { self_clone.process_client_req(stream).await });
         }
+    }
+
+    pub async fn start_expiry_checker(self) {
+        info!("Starting expiry checker");
+        let store = self.store.clone();
+        let expiries = self.expiries.clone();
+        tokio::spawn(async move {
+            loop {
+                let mut next_expiry = None;
+                {
+                    let expiries_lock = expiries.lock().await;
+                    if let Some(Reverse((time, _))) = expiries_lock.peek() {
+                        next_expiry = Some(*time);
+                    }
+                }
+                match next_expiry {
+                    Some(next) => {
+                        let now = Instant::now();
+                        if now >= next {
+                            let mut store = store.lock().await;
+                            let mut expiries_lock = expiries.lock().await;
+                            while let Some(Reverse((time, key))) = expiries_lock.pop() {
+                                if time <= now {
+                                    info!("Expiring key {}", key);
+                                    store.remove(&key);
+                                } else {
+                                    expiries_lock.push(Reverse((time, key)));
+                                    break;
+                                }
+                            }
+                        }
+                        tokio::time::sleep_until(next.into()).await;
+                    }
+                    None => tokio::time::sleep(Duration::from_secs(10)).await, // Sleep longer if no expiries are pending
+                }
+            }
+        });
     }
 
     async fn process_client_req(self, mut stream: TcpStream) -> anyhow::Result<()> {
@@ -173,19 +94,27 @@ impl Redis {
     }
 
     pub async fn handle_command(self, command: RedisCommand) -> RedisCommandResponse {
+        info!("Handling command: {:?}", command);
         match command {
             RedisCommand::Ping => RedisCommandResponse::new("PONG".to_string()),
             RedisCommand::Pong => RedisCommandResponse::new("PING".to_string()),
             RedisCommand::Echo(s) => RedisCommandResponse::new(s),
-            RedisCommand::Set(key, value) => {
+            RedisCommand::Set(key, value, expiry) => {
                 let mut store = self.store.lock().await;
-                store.insert(key, value);
+                if let Some(expiry) = expiry {
+                    self.expiries.lock().await.push(Reverse((
+                        Instant::now() + Duration::from_millis(expiry),
+                        key.clone(),
+                    )));
+                }
+                store.insert(key, (value, expiry));
                 RedisCommandResponse::new("OK".to_string())
             }
+
             RedisCommand::Get(key) => {
                 let store = self.store.lock().await;
                 match store.get(&key) {
-                    Some(value) => RedisCommandResponse::new(value.clone()),
+                    Some((value, _expiry)) => RedisCommandResponse::new(value.clone()),
                     None => RedisCommandResponse::new("(nil)".to_string()),
                 }
             }
