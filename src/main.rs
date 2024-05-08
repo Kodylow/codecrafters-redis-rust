@@ -1,19 +1,13 @@
-use std::net::TcpListener;
+mod redis;
+mod server;
 
-fn main() {
-    // You can use print statements as follows for debugging, they'll be visible when running tests.
-    println!("Logs from your program will appear here!");
+use tracing::Level;
+use tracing_subscriber::fmt::Subscriber;
 
-    let listener = TcpListener::bind("127.0.0.1:6379").unwrap();
+fn main() -> anyhow::Result<()> {
+    let subscriber = Subscriber::builder().with_max_level(Level::INFO).finish();
+    tracing::subscriber::set_global_default(subscriber)?;
 
-    for stream in listener.incoming() {
-        match stream {
-            Ok(_stream) => {
-                println!("accepted new connection");
-            }
-            Err(e) => {
-                println!("error: {}", e);
-            }
-        }
-    }
+    const REDIS_SERVER_ADDRESS: &str = "127.0.0.1:6379";
+    server::start_redis_server(REDIS_SERVER_ADDRESS)
 }
