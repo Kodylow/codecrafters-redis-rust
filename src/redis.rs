@@ -16,9 +16,40 @@ use crate::{
     utils::{millis_to_timestamp_from_now, now_millis},
 };
 
+#[derive(Debug, Clone)]
+struct RedisInfo {
+    role: String,
+    connected_slaves: usize,
+    master_replid: String,
+    master_repl_offset: i64,
+    second_repl_offset: i64,
+    repl_backlog_active: bool,
+    repl_backlog_size: usize,
+    repl_backlog_first_byte_offset: i64,
+    repl_backlog_histlen: usize,
+}
+
+impl ToString for RedisInfo {
+    fn to_string(&self) -> String {
+        format!(
+            "role:{}\r\nconnected_slaves:{}\r\nmaster_replid:{}\r\nmaster_repl_offset:{}\r\nsecond_repl_offset:{}\r\nrepl_backlog_active:{}\r\nrepl_backlog_size:{}\r\nrepl_backlog_first_byte_offset:{}\r\nrepl_backlog_histlen:{}",
+            self.role,
+            self.connected_slaves,
+            self.master_replid,
+            self.master_repl_offset,
+            self.second_repl_offset,
+            self.repl_backlog_active as u8, // Convert bool to u8 for display purposes
+            self.repl_backlog_size,
+            self.repl_backlog_first_byte_offset,
+            self.repl_backlog_histlen
+        )
+    }
+}
+
 /// A Redis server implementation.
 #[derive(Debug, Clone)]
 pub struct Redis {
+    info: RedisInfo,
     address: String,
     store: Arc<Mutex<BTreeMap<String, (String, Option<u64>)>>>,
     expiries: Arc<Mutex<BinaryHeap<Reverse<(u64, String)>>>>,
@@ -29,6 +60,17 @@ impl Redis {
     pub fn new(host: String, port: String) -> Self {
         let address = format!("{}:{}", host, port);
         Redis {
+            info: RedisInfo {
+                role: "master".to_string(),
+                connected_slaves: 0,
+                master_replid: "".to_string(),
+                master_repl_offset: 0,
+                second_repl_offset: 0,
+                repl_backlog_active: false,
+                repl_backlog_size: 0,
+                repl_backlog_first_byte_offset: 0,
+                repl_backlog_histlen: 0,
+            },
             address,
             store: Arc::new(Mutex::new(BTreeMap::new())),
             expiries: Arc::new(Mutex::new(BinaryHeap::new())),
@@ -132,23 +174,10 @@ impl Redis {
         }
     }
 
+    /// Returns information about the server based on the requested section.
     pub fn info(&self, section: &str) -> RedisCommandResponse {
         match section {
-            "replication" => {
-                let response = [
-                    "role:master",
-                    "connected_slaves:0",
-                    "master_replid:00000000-0000-0000-0000-000000000000",
-                    "master_repl_offset:0",
-                    "second_repl_offset:-1",
-                    "repl_backlog_active:0",
-                    "repl_backlog_size:1048576",
-                    "repl_backlog_first_byte_offset:0",
-                    "repl_backlog_histlen:0",
-                ]
-                .join("\r\n");
-                RedisCommandResponse::new(response)
-            }
+            "replication" => RedisCommandResponse::new(self.info.to_string()),
             _ => RedisCommandResponse::_error("Unsupported INFO section".to_string()),
         }
     }
