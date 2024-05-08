@@ -110,12 +110,24 @@ impl Redis {
                 store.insert(key, (value, expiry));
                 RedisCommandResponse::new("OK".to_string())
             }
-
             RedisCommand::Get(key) => {
                 let store = self.store.lock().await;
+                let now = Instant::now();
                 match store.get(&key) {
-                    Some((value, _expiry)) => RedisCommandResponse::new(value.clone()),
-                    None => RedisCommandResponse::new("(nil)".to_string()),
+                    Some((_value, Some(expiry)))
+                        if now >= Instant::now() + Duration::from_millis(*expiry) =>
+                    {
+                        // Key has expired, return null bulk string
+                        RedisCommandResponse::new("$-1\r\n".to_string())
+                    }
+                    Some((value, _)) => {
+                        // Key is valid, return the value
+                        RedisCommandResponse::new(value.clone())
+                    }
+                    None => {
+                        // Key does not exist, return null bulk string
+                        RedisCommandResponse::new("$-1\r\n".to_string())
+                    }
                 }
             }
         }

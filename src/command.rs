@@ -1,7 +1,7 @@
 use std::fmt::{Display, Formatter};
 
 use serde::{Deserialize, Serialize};
-use tracing::{error, info};
+use tracing::info;
 
 // Enum for Redis commands
 #[derive(Debug, Clone, Deserialize, Serialize)]
