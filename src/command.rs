@@ -15,6 +15,7 @@ pub enum RedisCommand {
     Echo(String),
     Get(String),
     Set(String, String, Option<u64>),
+    Info(String),
 }
 
 impl Display for RedisCommand {
@@ -31,6 +32,7 @@ impl Display for RedisCommand {
                     write!(f, "SET {} {}", key, value)
                 }
             }
+            RedisCommand::Info(section) => write!(f, "INFO {}", section),
         }
     }
 }
@@ -82,6 +84,14 @@ impl RedisCommand {
                 let _key_length = Self::extract_line(&mut lines, '$')?;
                 let key = lines.next().context("Key not found")?;
                 Ok(RedisCommand::Get(key.to_string()))
+            }
+            "info" => {
+                if array_length < 2 {
+                    anyhow::bail!("INFO command requires a section argument");
+                }
+                let _section_length = Self::extract_line(&mut lines, '$')?;
+                let section = lines.next().context("Section not found")?;
+                Ok(RedisCommand::Info(section.to_string()))
             }
             _ => Err(anyhow::anyhow!("Unknown Redis command")),
         }
@@ -162,8 +172,13 @@ pub struct RedisCommandResponse {
 
 impl RedisCommandResponse {
     pub fn new(message: String) -> Self {
+        let formatted_message = if message.is_empty() {
+            "$-1\r\n".to_string()
+        } else {
+            format!("${}\r\n{}\r\n", message.len(), message)
+        };
         RedisCommandResponse {
-            message: format!("+{}\r\n", message),
+            message: formatted_message,
         }
     }
 

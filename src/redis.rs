@@ -128,6 +128,28 @@ impl Redis {
                 Some(value) => Ok(RedisCommandResponse::new(value)),
                 None => Ok(RedisCommandResponse::null()),
             },
+            RedisCommand::Info(section) => Ok(self.info(&section)),
+        }
+    }
+
+    pub fn info(&self, section: &str) -> RedisCommandResponse {
+        match section {
+            "replication" => {
+                let response = [
+                    "role:master",
+                    "connected_slaves:0",
+                    "master_replid:00000000-0000-0000-0000-000000000000",
+                    "master_repl_offset:0",
+                    "second_repl_offset:-1",
+                    "repl_backlog_active:0",
+                    "repl_backlog_size:1048576",
+                    "repl_backlog_first_byte_offset:0",
+                    "repl_backlog_histlen:0",
+                ]
+                .join("\r\n");
+                RedisCommandResponse::new(response)
+            }
+            _ => RedisCommandResponse::_error("Unsupported INFO section".to_string()),
         }
     }
 
