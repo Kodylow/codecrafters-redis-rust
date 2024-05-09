@@ -13,7 +13,7 @@ mod command;
 mod redis;
 mod utils;
 
-use crate::command::RedisCommand;
+use crate::command::RedisCommandParser;
 use crate::redis::{Redis, RedisRole};
 
 #[derive(Parser)]
@@ -44,7 +44,6 @@ async fn main() -> Result<()> {
     dotenv::dotenv().ok();
 
     let cli = Cli::parse();
-    info!("Building Redis instance");
     let redis = Arc::new(Redis::new(
         &cli.host,
         &cli.port,
@@ -52,29 +51,21 @@ async fn main() -> Result<()> {
         &cli.master_host,
         &cli.master_port,
     ));
-    info!("Redis instance built");
     let listener = TcpListener::bind(&redis.address).await?;
-    info!(
-        "Redis {} server listening on {}",
-        redis.info.role, &redis.info.master_host
-    );
 
     loop {
         if let Ok((mut stream, _)) = listener.accept().await {
-            let redis = Arc::clone(&redis);
-            tokio::spawn(async move {
-                let mut buffer = vec![0; 1024];
-                while let Ok(n) = stream.read(&mut buffer).await {
-                    if n == 0 {
-                        break;
-                    }
-                    let buffer_str = std::str::from_utf8(&buffer).unwrap();
-                    let command = RedisCommand::parse(buffer_str).unwrap();
-                    let response = redis.handle_command(command).await.unwrap();
-                    stream.write_all(response.message.as_bytes()).await.unwrap();
-                    buffer.fill(0);
+            let mut buffer = vec![0; 1024];
+            while let Ok(n) = stream.read(&mut buffer).await {
+                if n == 0 {
+                    break;
                 }
-            });
+                let buffer_str = std::str::from_utf8(&buffer).unwrap();
+                let command = RedisCommandParser::parse(buffer_str).unwrap();
+                let response = redis.handle_command(command).await.unwrap();
+                stream.write_all(response.message.as_bytes()).await.unwrap();
+                buffer.fill(0);
+            }
         }
     }
 }
