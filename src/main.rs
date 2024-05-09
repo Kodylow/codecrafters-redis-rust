@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -52,6 +52,12 @@ async fn main() -> Result<()> {
         &cli.master_port,
     ));
     let listener = TcpListener::bind(&redis.address).await?;
+    info!("Redis server listening on {}", redis.address);
+
+    let redis_clone = redis.clone();
+    tokio::spawn(async move {
+        redis_clone.expiry_worker().await;
+    });
 
     loop {
         if let Ok((mut stream, _)) = listener.accept().await {
@@ -60,10 +66,16 @@ async fn main() -> Result<()> {
                 if n == 0 {
                     break;
                 }
-                let buffer_str = std::str::from_utf8(&buffer).unwrap();
-                let command = RedisCommandParser::parse(buffer_str).unwrap();
-                let response = redis.handle_command(command).await.unwrap();
-                stream.write_all(response.message.as_bytes()).await.unwrap();
+                let buffer_str = std::str::from_utf8(&buffer).context("Invalid UTF-8")?;
+                let command = RedisCommandParser::parse(buffer_str).context("Invalid command")?;
+                let response = redis
+                    .handle_command(command)
+                    .await
+                    .context("Error handling command")?;
+                stream
+                    .write_all(response.message.as_bytes())
+                    .await
+                    .context("Error writing response")?;
                 buffer.fill(0);
             }
         }

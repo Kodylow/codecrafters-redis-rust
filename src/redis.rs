@@ -1,7 +1,14 @@
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, fmt::Display, str::FromStr, sync::Arc};
-use tokio::sync::Mutex;
-use tracing::info;
+use std::{
+    cmp::Reverse,
+    collections::{BTreeMap, BinaryHeap},
+    fmt::Display,
+    str::FromStr,
+    sync::Arc,
+    time::Duration,
+};
+use tokio::{sync::RwLock, time::Instant};
+use tracing::{debug, info};
 
 use crate::{
     command::{RedisCommand, RedisCommandResponse},
@@ -17,7 +24,10 @@ pub enum RedisRole {
 
 impl Display for RedisRole {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.to_string())
+        match self {
+            RedisRole::Master => write!(f, "master"),
+            RedisRole::Slave => write!(f, "slave"),
+        }
     }
 }
 
@@ -42,21 +52,24 @@ pub struct RedisInfo {
 
 #[derive(Debug, Clone)]
 pub struct RedisStore {
-    store: Arc<Mutex<BTreeMap<String, (String, Option<u64>)>>>,
+    store: Arc<RwLock<BTreeMap<String, (String, Option<u64>)>>>,
+    expirations: Arc<RwLock<BinaryHeap<Reverse<(u64, String)>>>>,
 }
 
 impl RedisStore {
     pub fn new() -> Self {
         RedisStore {
-            store: Arc::new(Mutex::new(BTreeMap::new())),
+            store: Arc::new(RwLock::new(BTreeMap::new())),
+            expirations: Arc::new(RwLock::new(BinaryHeap::new())),
         }
     }
 
     pub async fn get(&self, key: &str) -> Option<String> {
-        let store = self.store.lock().await;
+        let store = self.store.read().await;
         let value = store.get(key)?;
         if let Some(expiry) = value.1 {
             if now_millis() >= expiry {
+                drop(store);
                 self.remove(key).await;
                 return None;
             }
@@ -65,13 +78,38 @@ impl RedisStore {
     }
 
     pub async fn set(&self, key: &str, value: &str, expiry: Option<u64>) {
-        let mut store = self.store.lock().await;
+        let mut store = self.store.write().await;
+        let mut expirations = self.expirations.write().await;
+        if let Some(expiry_time) = expiry {
+            expirations.push(Reverse((expiry_time, key.to_string())));
+        }
         store.insert(key.to_string(), (value.to_string(), expiry));
     }
 
     pub async fn remove(&self, key: &str) {
-        let mut store = self.store.lock().await;
+        let mut store = self.store.write().await;
         store.remove(key);
+    }
+
+    pub async fn next_expiration(&self) -> Option<u64> {
+        let expirations = self.expirations.read().await;
+        expirations.peek().map(|exp| exp.0 .0)
+    }
+
+    pub async fn clean_expired_keys(&self) {
+        info!("Cleaning expired keys");
+        let mut store = self.store.write().await;
+        let mut expirations = self.expirations.write().await;
+        let now = now_millis();
+        while let Some(Reverse((expiry_time, key))) = expirations.peek() {
+            if *expiry_time <= now {
+                info!("Removing expired key: {}", key);
+                store.remove(key);
+                expirations.pop();
+            } else {
+                break;
+            }
+        }
     }
 }
 
@@ -105,6 +143,33 @@ impl Redis {
         redis
     }
 
+    /// Starts a background worker that cleans up expired keys in the store.
+    pub async fn expiry_worker(&self) {
+        loop {
+            let next_expiry = self.store.next_expiration().await;
+            match next_expiry {
+                Some(expiry_time) => {
+                    let now = now_millis();
+                    if expiry_time > now {
+                        // Sleep until the next expiry time or wake up earlier if a new earlier expiry is set
+                        debug!("Sleeping until expiry time: {}", expiry_time);
+                        tokio::time::sleep_until(
+                            Instant::now() + Duration::from_millis(expiry_time - now),
+                        )
+                        .await;
+                    }
+                    // Clean expired keys after waking up
+                    self.store.clean_expired_keys().await;
+                }
+                None => {
+                    // If no expirations are set, sleep for a long duration (e.g., 60 secs) or until a new key is set
+                    debug!("No expirations set, sleeping for 10 seconds");
+                    tokio::time::sleep(Duration::from_secs(10)).await;
+                }
+            }
+        }
+    }
+
     /// Returns information about the server based on the requested section.
     pub fn info(&self, section: &str) -> RedisCommandResponse {
         match section {
@@ -130,15 +195,15 @@ impl Redis {
             RedisCommand::Ping => Ok(RedisCommandResponse::new("PONG".to_string())),
             RedisCommand::Pong => Ok(RedisCommandResponse::new("PING".to_string())),
             RedisCommand::Echo(s) => Ok(RedisCommandResponse::new(s)),
-            RedisCommand::Set(key, value, expiry) => {
-                self.store.set(&key, &value, expiry).await;
-                Ok(RedisCommandResponse::new("OK".to_string()))
-            }
             RedisCommand::Get(key) => match self.store.get(&key).await {
                 Some(value) => Ok(RedisCommandResponse::new(value)),
                 None => Ok(RedisCommandResponse::null()),
             },
             RedisCommand::Info(section) => Ok(self.info(&section)),
+            RedisCommand::Set(key, value, expiry) => {
+                self.store.set(&key, &value, expiry).await;
+                Ok(RedisCommandResponse::new("OK".to_string()))
+            }
         }
     }
 }

@@ -4,6 +4,8 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
+use crate::utils::millis_to_timestamp_from_now;
+
 /// Enum for supportedRedis commands
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -56,6 +58,9 @@ impl RedisCommandParser {
 
         let array_length = Self::parse_array_length(&mut lines)?;
 
+        // Skip the length line for the command itself
+        let _ = Self::extract_line(&mut lines, '$')?;
+
         let command = lines.next().context("Command not found")?.to_lowercase();
 
         info!("Parsed command: {}", command);
@@ -102,7 +107,8 @@ impl RedisCommandParser {
         let expiry_str = lines
             .next()
             .ok_or_else(|| anyhow::anyhow!("Expiry value not found"))?;
-        expiry_str.parse::<u64>().context("Invalid expiry format")
+        let expiry_millis = expiry_str.parse::<u64>().context("Invalid expiry format")?;
+        Ok(millis_to_timestamp_from_now(expiry_millis)?)
     }
 }
 
@@ -139,11 +145,18 @@ fn handle_set_command<'a>(
     let key = RedisCommandParser::parse_argument(lines, "Key")?;
     let value = RedisCommandParser::parse_argument(lines, "Value")?;
 
-    let expiry = if array_length == 5 {
-        Some(RedisCommandParser::parse_expiry(lines)?)
+    let expiry = if array_length >= 5 {
+        // Check if the fourth argument is "PX"
+        let px_indicator = RedisCommandParser::parse_argument(lines, "PX Indicator")?;
+        if px_indicator.to_lowercase() == "px" {
+            Some(RedisCommandParser::parse_expiry(lines)?)
+        } else {
+            None
+        }
     } else {
         None
     };
+
     Ok(RedisCommand::Set(key, value, expiry))
 }
 
