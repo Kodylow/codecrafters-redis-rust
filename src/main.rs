@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use redis::types::RedisRole;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
@@ -14,7 +15,7 @@ mod redis;
 mod utils;
 
 use crate::command::RedisCommandParser;
-use crate::redis::{Redis, RedisRole};
+use crate::redis::Redis;
 
 #[derive(Parser)]
 #[clap(version = "1.0", author = "Kody Low <kodylow7@gmail.com>")]
