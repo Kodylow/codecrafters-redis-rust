@@ -15,7 +15,8 @@ pub enum RedisCommand {
     Echo(String),
     Get(String),
     Set(String, String, Option<u64>),
-    Info(String),
+    Info(Option<String>),
+    Replicate(String),
 }
 
 impl Display for RedisCommand {
@@ -32,7 +33,20 @@ impl Display for RedisCommand {
                     write!(f, "SET {} {}", key, value)
                 }
             }
-            RedisCommand::Info(section) => write!(f, "INFO {}", section),
+            RedisCommand::Replicate(s) => write!(f, "REPLICATE {}", s),
+            RedisCommand::Info(section) => match section {
+                Some(section) => write!(f, "INFO {}", section),
+                None => write!(f, "INFO"),
+            },
+        }
+    }
+}
+
+impl RedisCommand {
+    pub fn is_write_operation(&self) -> bool {
+        match self {
+            RedisCommand::Set(_, _, _) => true,
+            _ => false,
         }
     }
 }
@@ -72,6 +86,7 @@ impl RedisCommandParser {
             "set" => handle_set_command(&mut lines, array_length),
             "get" => handle_get_command(&mut lines, array_length),
             "info" => handle_info_command(&mut lines, array_length),
+            "replicate" => handle_replicate_command(&mut lines, array_length),
             _ => Err(anyhow::anyhow!("Unknown Redis command")),
         }
     }
@@ -168,7 +183,18 @@ fn handle_info_command<'a>(
         anyhow::bail!("INFO command requires a section argument");
     }
     let section = RedisCommandParser::parse_argument(lines, "Section")?;
-    Ok(RedisCommand::Info(section))
+    Ok(RedisCommand::Info(Some(section)))
+}
+
+fn handle_replicate_command<'a>(
+    lines: &mut impl Iterator<Item = &'a str>,
+    array_length: usize,
+) -> Result<RedisCommand, anyhow::Error> {
+    if array_length < 2 {
+        anyhow::bail!("REPLICATE command requires data argument");
+    }
+    let data = RedisCommandParser::parse_argument(lines, "Data")?;
+    Ok(RedisCommand::Replicate(data))
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

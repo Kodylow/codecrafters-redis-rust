@@ -13,6 +13,7 @@ clap = { version = "4.5.4", features = [
   "env",
 ] } # command line parsing
 dotenv = "0.15.0" # environment variables
+reqwest = "0.12.4"
 serde = { version = "1.0.201", features = ["derive"] } # serialization
 thiserror = "1.0.32" # error handling
 tokio = { version = "1.23.0", features = ["full"] } # async networking

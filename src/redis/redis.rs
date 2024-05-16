@@ -16,6 +16,8 @@ pub struct Redis {
     pub info: RedisInfo,
     pub address: String,
     pub store: RedisStore,
+    pub slaves: Vec<String>,
+    pub reqwest_client: reqwest::Client,
 }
 
 impl Redis {
@@ -23,7 +25,7 @@ impl Redis {
     pub fn new(
         host: &str,
         port: &str,
-        role: RedisRole,
+        role: RedisRole, // This is now directly passed in, determined by the CLI args
         master_host: &str,
         master_port: &str,
     ) -> Self {
@@ -36,8 +38,48 @@ impl Redis {
             },
             address,
             store: RedisStore::new(),
+            slaves: Vec::new(),
+            reqwest_client: reqwest::Client::new(),
         };
         redis
+    }
+
+    pub async fn add_slave(&mut self, slave_address: String) {
+        self.slaves.push(slave_address);
+    }
+
+    pub async fn replicate_to_slaves(&self, command: &str) -> Result<(), anyhow::Error> {
+        for slave in &self.slaves {
+            let command_to_send = format!("REPLICATE {}\r\n", command);
+            let slave_address = format!("http://{}", slave);
+            let send_result = self
+                .reqwest_client
+                .post(&slave_address)
+                .body(command_to_send)
+                .send()
+                .await;
+            match send_result {
+                Ok(response) => {
+                    if response.status().is_success() {
+                        debug!("Command '{}' replicated to slave at {}", command, slave);
+                    } else {
+                        debug!(
+                            "Failed to replicate command '{}' to slave at {}: Status {}",
+                            command,
+                            slave,
+                            response.status()
+                        );
+                    }
+                }
+                Err(e) => {
+                    debug!(
+                        "Error replicating command '{}' to slave at {}: {}",
+                        command, slave, e
+                    );
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Starts a background worker that cleans up expired keys in the store.
@@ -96,9 +138,30 @@ impl Redis {
                 Some(value) => Ok(RedisCommandResponse::new(value)),
                 None => Ok(RedisCommandResponse::null()),
             },
-            RedisCommand::Info(section) => Ok(self.info(&section)),
+            RedisCommand::Info(section) => {
+                match section.as_deref() {
+                    // Use `as_deref` to convert Option<String> to Option<&str>
+                    Some("replication") => {
+                        let info_message = format!(
+                            "role:{}\r\nmaster_host:{}\r\nmaster_port:{}",
+                            self.info.role, self.info.master_host, self.info.master_port
+                        );
+                        Ok(RedisCommandResponse::new(info_message))
+                    }
+                    _ => {
+                        // Handle unsupported sections
+                        Ok(RedisCommandResponse::_error(
+                            "Unsupported INFO section".to_string(),
+                        ))
+                    }
+                }
+            }
             RedisCommand::Set(key, value, expiry) => {
                 self.store.set(&key, &value, expiry).await;
+                Ok(RedisCommandResponse::new("OK".to_string()))
+            }
+            RedisCommand::Replicate(data) => {
+                self.replicate_to_slaves(&data).await?;
                 Ok(RedisCommandResponse::new("OK".to_string()))
             }
         }
