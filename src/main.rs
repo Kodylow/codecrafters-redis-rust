@@ -7,8 +7,10 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
 };
-use tracing::{info, subscriber, Level};
-use tracing_subscriber::FmtSubscriber;
+use tracing::{info, Level};
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::Layer;
+use tracing_subscriber::{prelude::__tracing_subscriber_SubscriberExt, EnvFilter};
 
 mod command;
 mod redis;
@@ -38,10 +40,17 @@ pub struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let subscriber = FmtSubscriber::builder()
-        .with_max_level(Level::INFO)
-        .finish();
-    subscriber::set_global_default(subscriber)?;
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer().with_filter(
+                EnvFilter::builder()
+                    .with_default_directive(Level::INFO.into())
+                    .from_env()
+                    .context("Invalid log level")?,
+            ),
+        )
+        .try_init()?;
+
     dotenv::dotenv().ok();
 
     let cli = Cli::parse();
