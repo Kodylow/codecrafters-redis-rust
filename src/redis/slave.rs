@@ -1,3 +1,4 @@
+use anyhow::Context;
 use tracing::{debug, error, info};
 
 use crate::command::{AdminCommand, RedisCommand, RedisCommandResponse};
@@ -37,7 +38,10 @@ impl Slave {
             self.base.info.master_host, self.base.info.master_port
         );
         let command_str = command.to_resp2();
-        info!("Sending command to master {}", command_str);
+        info!(
+            "Sending command to master {}: {}",
+            master_address, command_str
+        );
         let response = self
             .base
             .send_command(&master_address, &command_str)
@@ -78,7 +82,12 @@ impl Slave {
 
     /// Sends a REPLCONF command to the master.
     pub async fn replconf(&self) -> Result<String, anyhow::Error> {
-        let port = self.base.info.master_port.as_str();
+        let port = self
+            .base
+            .info
+            .master_port
+            .parse::<u16>()
+            .context("Invalid port number")?;
         let command = RedisCommand::Replconf(vec!["listening-port".to_string(), port.to_string()]);
         let response = self.send_command_to_master(command).await?;
         Ok(response)
