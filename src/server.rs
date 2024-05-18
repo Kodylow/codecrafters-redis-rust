@@ -36,11 +36,13 @@ pub async fn start_master_server(redis: Arc<Mutex<Master>>) -> Result<()> {
                         eprintln!("Invalid UTF-8 sequence");
                         continue;
                     }
-                };
+                }
+                .to_string();
+                buffer.fill(0);
 
                 info!("Received command in buffer: {:?}", buffer_str);
 
-                let command = match RedisCommandParser::parse(buffer_str) {
+                let command = match RedisCommandParser::parse(&buffer_str) {
                     Ok(cmd) => cmd,
                     Err(e) => {
                         eprintln!("Invalid command: {:?}", e);
@@ -58,7 +60,7 @@ pub async fn start_master_server(redis: Arc<Mutex<Master>>) -> Result<()> {
                     if let Err(e) = redis_clone
                         .lock()
                         .await
-                        .replicate_to_slaves(buffer_str)
+                        .replicate_to_slaves(&buffer_str)
                         .await
                     {
                         eprintln!("Error replicating to slaves: {:?}", e);
@@ -77,7 +79,6 @@ pub async fn start_master_server(redis: Arc<Mutex<Master>>) -> Result<()> {
                     eprintln!("Error writing response: {:?}", e);
                     continue;
                 }
-                buffer.fill(0);
             }
         });
     }
