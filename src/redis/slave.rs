@@ -82,15 +82,29 @@ impl Slave {
 
     /// Sends a REPLCONF command to the master.
     pub async fn replconf(&self) -> Result<String, anyhow::Error> {
+        // Send REPLCONF listening-port <PORT>
         let port = self
             .base
             .info
             .master_port
             .parse::<u16>()
             .context("Invalid port number")?;
-        let command = RedisCommand::Replconf(vec!["listening-port".to_string(), port.to_string()]);
-        let response = self.send_command_to_master(command).await?;
-        Ok(response)
+        let listening_port_command =
+            RedisCommand::Replconf(vec!["listening-port".to_string(), port.to_string()]);
+        let listening_port_response = self.send_command_to_master(listening_port_command).await?;
+        if !listening_port_response.starts_with("+OK") {
+            return Err(anyhow::anyhow!("Failed to send REPLCONF listening-port"));
+        }
+
+        // Send REPLCONF capa psync2
+        let capa_psync2_command =
+            RedisCommand::Replconf(vec!["capa".to_string(), "psync2".to_string()]);
+        let capa_psync2_response = self.send_command_to_master(capa_psync2_command).await?;
+        if !capa_psync2_response.starts_with("+OK") {
+            return Err(anyhow::anyhow!("Failed to send REPLCONF capa psync2"));
+        }
+
+        Ok("REPLCONF commands sent successfully".to_string())
     }
 }
 
