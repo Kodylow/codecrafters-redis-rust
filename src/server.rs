@@ -37,6 +37,9 @@ pub async fn start_master_server(redis: Arc<Mutex<Master>>) -> Result<()> {
                         continue;
                     }
                 };
+
+                info!("Received command in buffer: {:?}", buffer_str);
+
                 let command = match RedisCommandParser::parse(buffer_str) {
                     Ok(cmd) => cmd,
                     Err(e) => {
