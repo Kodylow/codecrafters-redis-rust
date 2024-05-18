@@ -60,6 +60,16 @@ impl RedisCommand {
             _ => false,
         }
     }
+
+    pub fn to_resp2(&self) -> String {
+        let command_str = self.to_string();
+        let parts: Vec<&str> = command_str.split_whitespace().collect();
+        let mut resp2 = format!("*{}\r\n", parts.len());
+        for part in parts {
+            resp2.push_str(&format!("${}\r\n{}\r\n", part.len(), part));
+        }
+        resp2
+    }
 }
 
 pub struct RedisCommandParser;

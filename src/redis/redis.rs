@@ -1,6 +1,10 @@
 use std::time::Duration;
 
-use tokio::time::Instant;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpStream,
+    time::Instant,
+};
 use tracing::{debug, info};
 
 use crate::{
@@ -17,7 +21,6 @@ pub struct Redis {
     pub address: String,
     pub store: RedisStore,
     pub slaves: Vec<String>,
-    pub reqwest_client: reqwest::Client,
 }
 
 impl Redis {
@@ -35,7 +38,6 @@ impl Redis {
             address,
             store: RedisStore::new(),
             slaves: Vec::new(),
-            reqwest_client: reqwest::Client::new(),
         };
         redis
     }
@@ -51,32 +53,40 @@ impl Redis {
 
     pub async fn replicate_to_slaves(&self, command: &str) -> Result<(), anyhow::Error> {
         for slave in &self.slaves {
-            let command_to_send = format!("REPLICATE {}\r\n", command);
-            let slave_address = format!("http://{}", slave);
-            let send_result = self
-                .reqwest_client
-                .post(&slave_address)
-                .body(command_to_send)
-                .send()
-                .await;
-            match send_result {
-                Ok(response) => {
-                    if response.status().is_success() {
-                        debug!("Command '{}' replicated to slave at {}", command, slave);
-                    } else {
-                        debug!(
-                            "Failed to replicate command '{}' to slave at {}: Status {}",
-                            command,
-                            slave,
-                            response.status()
-                        );
+            let command_to_send = format!(
+                "*2\r\n$9\r\nREPLICATE\r\n${}\r\n{}\r\n",
+                command.len(),
+                command
+            );
+            let slave_address = format!("{}:{}", slave, "6379"); // Assuming default Redis port 6379
+
+            match TcpStream::connect(&slave_address).await {
+                Ok(mut stream) => {
+                    if let Err(e) = stream.write_all(command_to_send.as_bytes()).await {
+                        debug!("Error sending command to slave at {}: {}", slave, e);
+                        continue;
+                    }
+
+                    let mut buffer = [0; 1024];
+                    match stream.read(&mut buffer).await {
+                        Ok(n) => {
+                            let response = std::str::from_utf8(&buffer[..n])?;
+                            if response.starts_with("+OK") {
+                                debug!("Command '{}' replicated to slave at {}", command, slave);
+                            } else {
+                                debug!(
+                                    "Failed to replicate command '{}' to slave at {}: Response {}",
+                                    command, slave, response
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            debug!("Error reading response from slave at {}: {}", slave, e);
+                        }
                     }
                 }
                 Err(e) => {
-                    debug!(
-                        "Error replicating command '{}' to slave at {}: {}",
-                        command, slave, e
-                    );
+                    debug!("Error connecting to slave at {}: {}", slave, e);
                 }
             }
         }
@@ -85,22 +95,22 @@ impl Redis {
 
     /// Sends a PING command to the master.
     pub async fn send_ping_to_master(&self) -> Result<(), anyhow::Error> {
-        let master_address = format!("http://{}:{}", self.info.master_host, self.info.master_port);
-        let ping_command = RedisCommandResponse::new("PING".to_string());
-        let response = self
-            .reqwest_client
-            .post(&master_address)
-            .body(ping_command.message)
-            .send()
-            .await?;
+        let master_address = format!("{}:{}", self.info.master_host, self.info.master_port);
+        let ping_command = RedisCommand::Ping.to_resp2();
 
-        if response.status().is_success() {
+        let mut stream = TcpStream::connect(&master_address).await?;
+        stream.write_all(ping_command.as_bytes()).await?;
+
+        let mut buffer = [0; 1024];
+        let n = stream.read(&mut buffer).await?;
+        let response = std::str::from_utf8(&buffer[..n])?;
+
+        if response.starts_with("+PONG") {
             info!("Successfully sent PING to master at {}", master_address);
         } else {
             debug!(
-                "Failed to send PING to master at {}: Status {}",
-                master_address,
-                response.status()
+                "Failed to send PING to master at {}: Response {}",
+                master_address, response
             );
         }
         Ok(())
