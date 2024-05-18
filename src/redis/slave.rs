@@ -56,6 +56,27 @@ impl Slave {
         }
         Ok(response)
     }
+
+    /// Performs the handshake with the master.
+    pub async fn handshake_with_master(&self) -> Result<(), anyhow::Error> {
+        // Send PING command
+        let ping_response = self.send_command_to_master(RedisCommand::Ping).await?;
+        if !ping_response.starts_with("+PONG") {
+            return Err(anyhow::anyhow!("Failed to receive PONG from master"));
+        }
+
+        // Send REPLCONF listening-port <port> command
+        let replconf_command = RedisCommand::Replconf(vec![format!(
+            "listening-port {}",
+            self.base.address.split(':').last().unwrap()
+        )]);
+        let replconf_response = self.send_command_to_master(replconf_command).await?;
+        if !replconf_response.starts_with("+") {
+            return Err(anyhow::anyhow!("Failed to send REPLCONF to master"));
+        }
+
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]
