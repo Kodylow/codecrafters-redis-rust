@@ -64,17 +64,6 @@ impl Slave {
         if !ping_response.starts_with("+PONG") {
             return Err(anyhow::anyhow!("Failed to receive PONG from master"));
         }
-
-        // Send REPLCONF listening-port <port> command
-        let listening_port = self.base.address.split(':').last().unwrap();
-        let replconf_command =
-            RedisCommand::Replconf(vec![format!("listening-port {}", listening_port)]);
-        let replconf_response = self.send_command_to_master(replconf_command).await?;
-        debug!("Received REPLCONF response: {:?}", replconf_response);
-        if !replconf_response.starts_with("+") {
-            return Err(anyhow::anyhow!("Failed to send REPLCONF to master"));
-        }
-
         Ok(())
     }
 }
@@ -90,7 +79,7 @@ impl RedisServer for Slave {
         info!("Handling command: {:?}", command);
         match command {
             RedisCommand::Ping => Ok(RedisCommandResponse::new("PONG".to_string())),
-            RedisCommand::Pong => Ok(RedisCommandResponse::new("PING".to_string())),
+            RedisCommand::Pong => Ok(RedisCommandResponse::new("REPLCONF".to_string())),
             RedisCommand::Echo(s) => Ok(RedisCommandResponse::new(s)),
             RedisCommand::Get(key) => match self.base.store.get(&key).await {
                 Some(value) => Ok(RedisCommandResponse::new(value)),
