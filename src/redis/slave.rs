@@ -1,4 +1,3 @@
-use anyhow::Context;
 use tracing::{debug, error, info};
 
 use crate::command::{AdminCommand, RedisCommand, RedisCommandResponse};
@@ -65,6 +64,12 @@ impl Slave {
         if !ping_response.starts_with("+PONG") {
             return Err(anyhow::anyhow!("Failed to receive PONG from master"));
         }
+        info!("Successfully sent PING to master");
+
+        // Send REPLCONF command
+        let replconf_response = self.replconf().await?;
+        info!("Successfully sent REPLCONF to master");
+
         Ok(())
     }
 
