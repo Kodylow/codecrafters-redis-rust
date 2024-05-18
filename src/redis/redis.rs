@@ -86,11 +86,11 @@ impl Redis {
     /// Sends a PING command to the master.
     pub async fn send_ping_to_master(&self) -> Result<(), anyhow::Error> {
         let master_address = format!("http://{}:{}", self.info.master_host, self.info.master_port);
-        let ping_command = "*1\r\n$4\r\nPING\r\n";
+        let ping_command = RedisCommandResponse::new("PING".to_string());
         let response = self
             .reqwest_client
             .post(&master_address)
-            .body(ping_command)
+            .body(ping_command.message)
             .send()
             .await?;
 
