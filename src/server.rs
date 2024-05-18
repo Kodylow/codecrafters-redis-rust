@@ -1,20 +1,22 @@
+use crate::{
+    command::RedisCommand,
+    redis::{base::RedisServer, slave::Slave},
+};
 use anyhow::Result;
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::{net::TcpListener, sync::Mutex};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpListener,
+    sync::Mutex,
+};
 use tracing::info;
 
-use crate::redis::{master::Master, slave::Slave};
-use crate::{
-    command::{RedisCommand, RedisCommandParser},
-    redis::base::RedisServer,
-};
+use crate::{command::RedisCommandParser, redis::master::Master};
 
 pub async fn start_master_server(redis: Arc<Mutex<Master>>) -> Result<()> {
-    let redis_info = redis.lock().await.base.info.clone();
-    let address = format!("{}:{}", redis_info.master_host, redis_info.master_port);
-    let listener = TcpListener::bind(&address).await?;
-    info!("Redis server listening on {}", address);
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    info!("Redis master server listening on {}", address);
 
     let redis_clone = redis.lock().await.clone();
     tokio::spawn(async move {
@@ -76,10 +78,9 @@ pub async fn start_master_server(redis: Arc<Mutex<Master>>) -> Result<()> {
 }
 
 pub async fn start_slave_server(redis: Arc<Mutex<Slave>>) -> Result<()> {
-    let redis_info = redis.lock().await.base.info.clone();
-    let address = format!("{}:{}", redis_info.master_host, redis_info.master_port);
-    let listener = TcpListener::bind(&address).await?;
-    info!("Redis server listening on {}", address);
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    info!("Redis slave server listening on {}", address);
 
     // Initiate handshake by sending PING to master
     let redis_clone = redis.lock().await.clone();
