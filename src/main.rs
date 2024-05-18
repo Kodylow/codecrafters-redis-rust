@@ -6,6 +6,7 @@ use redis::types::RedisRole;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
+    sync::Mutex,
 };
 use tracing::{info, Level};
 use tracing_subscriber::util::SubscriberInitExt;
@@ -66,17 +67,17 @@ async fn main() -> Result<()> {
     } else {
         (cli.host.clone(), cli.port.clone())
     };
-    let redis = Arc::new(Redis::new(
+    let redis = Arc::new(Mutex::new(Redis::new(
         &cli.host,
         &cli.port,
         role,
         &master_host,
         &master_port,
-    ));
-    let listener = TcpListener::bind(&redis.address).await?;
-    info!("Redis server listening on {}", redis.address);
+    )));
+    let listener = TcpListener::bind(&redis.lock().await.address).await?;
+    info!("Redis server listening on {}", redis.lock().await.address);
 
-    let redis_clone = redis.clone();
+    let redis_clone = redis.lock().await.clone();
     tokio::spawn(async move {
         redis_clone.expiry_worker().await;
     });
@@ -94,10 +95,12 @@ async fn main() -> Result<()> {
                         RedisCommandParser::parse(buffer_str).context("Invalid command")?;
 
                     if command.is_write_operation() {
-                        redis.replicate_to_slaves(buffer_str).await?;
+                        redis.lock().await.replicate_to_slaves(buffer_str).await?;
                     }
 
                     let response = redis
+                        .lock()
+                        .await
                         .handle_command(command)
                         .await
                         .context("Error handling command")?;

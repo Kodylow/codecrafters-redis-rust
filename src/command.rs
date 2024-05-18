@@ -6,7 +6,15 @@ use tracing::info;
 
 use crate::utils::millis_to_timestamp_from_now;
 
-/// Enum for supportedRedis commands
+/// Enum for administrative commands
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AdminCommand {
+    Replicate(String),
+    AddSlave(String),
+}
+
+/// Enum for supported Redis protocol commands
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RedisCommand {
@@ -16,7 +24,7 @@ pub enum RedisCommand {
     Get(String),
     Set(String, String, Option<u64>),
     Info(Option<String>),
-    Replicate(String),
+    Admin(AdminCommand),
 }
 
 impl Display for RedisCommand {
@@ -33,10 +41,13 @@ impl Display for RedisCommand {
                     write!(f, "SET {} {}", key, value)
                 }
             }
-            RedisCommand::Replicate(s) => write!(f, "REPLICATE {}", s),
             RedisCommand::Info(section) => match section {
                 Some(section) => write!(f, "INFO {}", section),
                 None => write!(f, "INFO"),
+            },
+            RedisCommand::Admin(command) => match command {
+                AdminCommand::Replicate(data) => write!(f, "REPLICATE {}", data),
+                AdminCommand::AddSlave(data) => write!(f, "ADDSLAVE {}", data),
             },
         }
     }
@@ -86,7 +97,7 @@ impl RedisCommandParser {
             "set" => handle_set_command(&mut lines, array_length),
             "get" => handle_get_command(&mut lines, array_length),
             "info" => handle_info_command(&mut lines, array_length),
-            "replicate" => handle_replicate_command(&mut lines, array_length),
+            "replicate" | "addslave" => handle_admin_command(&mut lines, array_length),
             _ => Err(anyhow::anyhow!("Unknown Redis command")),
         }
     }
@@ -186,15 +197,22 @@ fn handle_info_command<'a>(
     Ok(RedisCommand::Info(Some(section)))
 }
 
-fn handle_replicate_command<'a>(
+fn handle_admin_command<'a>(
     lines: &mut impl Iterator<Item = &'a str>,
-    array_length: usize,
+    _array_length: usize,
 ) -> Result<RedisCommand, anyhow::Error> {
-    if array_length < 2 {
-        anyhow::bail!("REPLICATE command requires data argument");
+    let command_type = RedisCommandParser::parse_argument(lines, "Command Type")?;
+    match command_type.as_str() {
+        "replicate" => {
+            let data = RedisCommandParser::parse_argument(lines, "Data")?;
+            Ok(RedisCommand::Admin(AdminCommand::Replicate(data)))
+        }
+        "addslave" => {
+            let data = RedisCommandParser::parse_argument(lines, "Data")?;
+            Ok(RedisCommand::Admin(AdminCommand::AddSlave(data)))
+        }
+        _ => Err(anyhow::anyhow!("Unknown admin command")),
     }
-    let data = RedisCommandParser::parse_argument(lines, "Data")?;
-    Ok(RedisCommand::Replicate(data))
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

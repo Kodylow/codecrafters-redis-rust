@@ -4,7 +4,7 @@ use tokio::time::Instant;
 use tracing::{debug, info};
 
 use crate::{
-    command::{RedisCommand, RedisCommandResponse},
+    command::{AdminCommand, RedisCommand, RedisCommandResponse},
     utils::now_millis,
 };
 
@@ -44,8 +44,9 @@ impl Redis {
         redis
     }
 
-    pub async fn add_slave(&mut self, slave_address: String) {
+    pub async fn add_slave(&mut self, slave_address: String) -> Result<(), anyhow::Error> {
         self.slaves.push(slave_address);
+        Ok(())
     }
 
     pub async fn replicate_to_slaves(&self, command: &str) -> Result<(), anyhow::Error> {
@@ -126,7 +127,7 @@ impl Redis {
     /// Handles a Redis command.
     /// Parses the command, executes it and returns the response.
     pub async fn handle_command(
-        &self,
+        &mut self,
         command: RedisCommand,
     ) -> Result<RedisCommandResponse, anyhow::Error> {
         info!("Handling command: {:?}", command);
@@ -160,10 +161,16 @@ impl Redis {
                 self.store.set(&key, &value, expiry).await;
                 Ok(RedisCommandResponse::new("OK".to_string()))
             }
-            RedisCommand::Replicate(data) => {
-                self.replicate_to_slaves(&data).await?;
-                Ok(RedisCommandResponse::new("OK".to_string()))
-            }
+            RedisCommand::Admin(command) => match command {
+                AdminCommand::Replicate(data) => {
+                    self.replicate_to_slaves(&data).await?;
+                    Ok(RedisCommandResponse::new("OK".to_string()))
+                }
+                AdminCommand::AddSlave(data) => {
+                    self.add_slave(data).await?;
+                    Ok(RedisCommandResponse::new("OK".to_string()))
+                }
+            },
         }
     }
 }
