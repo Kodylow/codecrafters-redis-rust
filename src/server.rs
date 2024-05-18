@@ -45,6 +45,12 @@ pub async fn start_master_server(redis: Arc<Mutex<Master>>) -> Result<()> {
                     }
                 };
 
+                info!(
+                    "Role: {} Received command: {:?}",
+                    redis_clone.lock().await.base.info.role,
+                    command
+                );
+
                 if command.is_write_operation() {
                     if let Err(e) = redis_clone
                         .lock()
