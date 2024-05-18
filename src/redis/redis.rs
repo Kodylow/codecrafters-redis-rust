@@ -31,11 +31,7 @@ impl Redis {
     ) -> Self {
         let address = format!("{}:{}", host, port);
         let redis = Redis {
-            info: RedisInfo {
-                role,
-                master_host: master_host.to_string(),
-                master_port: master_port.to_string(),
-            },
+            info: RedisInfo::new(role, master_host, master_port),
             address,
             store: RedisStore::new(),
             slaves: Vec::new(),
@@ -110,20 +106,6 @@ impl Redis {
         }
     }
 
-    /// Returns information about the server based on the requested section.
-    pub fn _info(&self, section: &str) -> RedisCommandResponse {
-        match section {
-            "replication" => {
-                let info_message = format!(
-                    "role:{}\r\nmaster_host:{}\r\nmaster_port:{}",
-                    self.info.role, self.info.master_host, self.info.master_port
-                );
-                RedisCommandResponse::new(info_message)
-            }
-            _ => RedisCommandResponse::_error("Unsupported INFO section".to_string()),
-        }
-    }
-
     /// Handles a Redis command.
     /// Parses the command, executes it and returns the response.
     pub async fn handle_command(
@@ -144,8 +126,8 @@ impl Redis {
                     // Use `as_deref` to convert Option<String> to Option<&str>
                     Some("replication") => {
                         let info_message = format!(
-                            "role:{}\r\nmaster_host:{}\r\nmaster_port:{}",
-                            self.info.role, self.info.master_host, self.info.master_port
+                            "role:{}\r\nmaster_host:{}\r\nmaster_port:{}\r\nmaster_replid:{}\r\nmaster_repl_offset:{}",
+                            self.info.role, self.info.master_host, self.info.master_port, self.info.master_replid, self.info.master_repl_offset
                         );
                         Ok(RedisCommandResponse::new(info_message))
                     }
