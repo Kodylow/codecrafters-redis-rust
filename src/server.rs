@@ -1,7 +1,4 @@
-use crate::{
-    command::RedisCommand,
-    redis::{base::RedisServer, slave::Slave},
-};
+use crate::redis::{base::RedisServer, slave::Slave};
 use anyhow::Result;
 use std::sync::Arc;
 use tokio::{
@@ -82,11 +79,12 @@ pub async fn start_slave_server(redis: Arc<Mutex<Slave>>) -> Result<()> {
     let address = listener.local_addr()?;
     info!("Redis slave server listening on {}", address);
 
-    // Initiate handshake by sending PING to master
+    // Handshake with master
     let redis_clone = redis.lock().await.clone();
     tokio::spawn(async move {
-        if let Err(e) = redis_clone.send_command_to_master(RedisCommand::Ping).await {
-            eprintln!("Error sending PING to master: {:?}", e);
+        if let Err(e) = redis_clone.handshake_with_master().await {
+            eprintln!("Error handshaking with master: {:?}", e);
+            return;
         }
     });
 
