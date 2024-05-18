@@ -19,6 +19,16 @@ pub async fn start_server(redis: Arc<Mutex<Redis>>) -> Result<()> {
         redis_clone.expiry_worker().await;
     });
 
+    // Initiate handshake by sending PING to master
+    let redis_clone = redis.lock().await.clone();
+    if redis_clone.is_slave() {
+        tokio::spawn(async move {
+            if let Err(e) = redis_clone.send_ping_to_master().await {
+                eprintln!("Error sending PING to master: {:?}", e);
+            }
+        });
+    }
+
     loop {
         let (mut stream, _) = listener.accept().await?;
         let redis_clone = redis.clone();

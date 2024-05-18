@@ -45,6 +45,10 @@ impl Redis {
         Ok(())
     }
 
+    pub fn is_slave(&self) -> bool {
+        self.info.role == RedisRole::Slave
+    }
+
     pub async fn replicate_to_slaves(&self, command: &str) -> Result<(), anyhow::Error> {
         for slave in &self.slaves {
             let command_to_send = format!("REPLICATE {}\r\n", command);
@@ -75,6 +79,29 @@ impl Redis {
                     );
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// Sends a PING command to the master.
+    pub async fn send_ping_to_master(&self) -> Result<(), anyhow::Error> {
+        let master_address = format!("http://{}:{}", self.info.master_host, self.info.master_port);
+        let ping_command = "*1\r\n$4\r\nPING\r\n";
+        let response = self
+            .reqwest_client
+            .post(&master_address)
+            .body(ping_command)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            info!("Successfully sent PING to master at {}", master_address);
+        } else {
+            debug!(
+                "Failed to send PING to master at {}: Status {}",
+                master_address,
+                response.status()
+            );
         }
         Ok(())
     }
