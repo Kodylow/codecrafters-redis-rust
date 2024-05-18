@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use anyhow::Context;
 use tokio::time::Instant;
 use tracing::{debug, info};
 
@@ -59,6 +60,29 @@ impl Master {
                 );
             }
         }
+        Ok(())
+    }
+
+    async fn replconf(&mut self, data: Vec<String>) -> Result<(), anyhow::Error> {
+        if data.len() < 2 {
+            return Err(anyhow::anyhow!(
+                "REPLCONF command requires at least two arguments"
+            ));
+        }
+
+        match data[0].as_str() {
+            "listening-port" => {
+                let port = data[1].parse::<u16>().context("Invalid port number")?;
+                info!("Replica listening on port: {}", port);
+            }
+            "capa" if data[1] == "psync2" => {
+                info!("Replica supports PSYNC2");
+            }
+            _ => {
+                return Err(anyhow::anyhow!("Unknown REPLCONF argument: {}", data[0]));
+            }
+        }
+
         Ok(())
     }
 
@@ -126,6 +150,10 @@ impl RedisServer for Master {
                     Ok(RedisCommandResponse::new("OK".to_string()))
                 }
             },
+            RedisCommand::Replconf(data) => {
+                self.replconf(data).await?;
+                Ok(RedisCommandResponse::new("OK".to_string()))
+            }
         }
     }
 }

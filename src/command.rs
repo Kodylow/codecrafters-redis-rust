@@ -25,6 +25,7 @@ pub enum RedisCommand {
     Set(String, String, Option<u64>),
     Info(Option<String>),
     Admin(AdminCommand),
+    Replconf(Vec<String>),
 }
 
 impl Display for RedisCommand {
@@ -49,6 +50,7 @@ impl Display for RedisCommand {
                 AdminCommand::Replicate(data) => write!(f, "REPLICATE {}", data),
                 AdminCommand::AddSlave(data) => write!(f, "ADDSLAVE {}", data),
             },
+            RedisCommand::Replconf(data) => write!(f, "REPLCONF {}", data.join(" ")),
         }
     }
 }
@@ -107,6 +109,7 @@ impl RedisCommandParser {
             "set" => handle_set_command(&mut lines, array_length),
             "get" => handle_get_command(&mut lines, array_length),
             "info" => handle_info_command(&mut lines, array_length),
+            "replconf" => handle_replconf_command(&mut lines, array_length),
             "replicate" | "addslave" => handle_admin_command(&mut lines, array_length),
             _ => Err(anyhow::anyhow!("Unknown Redis command")),
         }
@@ -223,6 +226,19 @@ fn handle_admin_command<'a>(
         }
         _ => Err(anyhow::anyhow!("Unknown admin command")),
     }
+}
+
+fn handle_replconf_command<'a>(
+    lines: &mut impl Iterator<Item = &'a str>,
+    array_length: usize,
+) -> Result<RedisCommand, anyhow::Error> {
+    if array_length < 3 {
+        anyhow::bail!("REPLCONF command requires at least two arguments");
+    }
+    let args = (0..array_length - 1)
+        .map(|_| RedisCommandParser::parse_argument(lines, "Argument"))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(RedisCommand::Replconf(args))
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

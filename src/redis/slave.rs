@@ -1,4 +1,4 @@
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 
 use crate::command::{AdminCommand, RedisCommand, RedisCommandResponse};
 
@@ -105,6 +105,12 @@ impl RedisServer for Slave {
                     ))
                 }
             },
+            RedisCommand::Replconf(_data) => {
+                error!("Slaves do not support REPLCONF");
+                Ok(RedisCommandResponse::_error(
+                    "REPLCONF command not supported on slave".to_string(),
+                ))
+            }
         }
     }
 }
