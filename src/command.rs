@@ -236,8 +236,12 @@ fn handle_replconf_command<'a>(
         anyhow::bail!("REPLCONF command requires at least one argument");
     }
     let args = (0..array_length - 1)
-        .map(|_| RedisCommandParser::parse_argument(lines, "Argument"))
-        .collect::<Result<Vec<_>, _>>()?;
+        .map(|_| {
+            let arg = RedisCommandParser::parse_argument(lines, "Argument")?;
+            info!("Parsed REPLCONF argument: {}", arg);
+            Ok(arg)
+        })
+        .collect::<Result<Vec<String>, anyhow::Error>>()?;
     Ok(RedisCommand::Replconf(args))
 }
 
