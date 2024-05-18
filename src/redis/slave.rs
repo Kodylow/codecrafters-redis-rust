@@ -1,3 +1,4 @@
+use anyhow::Context;
 use tracing::{debug, error, info};
 
 use crate::command::{AdminCommand, RedisCommand, RedisCommandResponse};
@@ -66,6 +67,14 @@ impl Slave {
         }
         Ok(())
     }
+
+    /// Sends a REPLCONF command to the master.
+    pub async fn replconf(&self) -> Result<String, anyhow::Error> {
+        let port = self.base.info.master_port.as_str();
+        let command = RedisCommand::Replconf(vec!["listening-port".to_string(), port.to_string()]);
+        let response = self.send_command_to_master(command).await?;
+        Ok(response)
+    }
 }
 
 #[async_trait::async_trait]
@@ -79,7 +88,10 @@ impl RedisServer for Slave {
         info!("Handling command: {:?}", command);
         match command {
             RedisCommand::Ping => Ok(RedisCommandResponse::new("PONG".to_string())),
-            RedisCommand::Pong => Ok(RedisCommandResponse::new("REPLCONF".to_string())),
+            RedisCommand::Pong => {
+                let replconf_response = self.replconf().await?;
+                Ok(RedisCommandResponse::new(replconf_response))
+            }
             RedisCommand::Echo(s) => Ok(RedisCommandResponse::new(s)),
             RedisCommand::Get(key) => match self.base.store.get(&key).await {
                 Some(value) => Ok(RedisCommandResponse::new(value)),
