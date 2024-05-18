@@ -43,6 +43,9 @@ impl Slave {
             .send_command(&master_address, &command_str)
             .await?;
 
+        // Log the raw response for debugging
+        debug!("Raw response from master: {:?}", response);
+
         if response.starts_with("+") {
             info!(
                 "Successfully sent command to master at {}: {}",
