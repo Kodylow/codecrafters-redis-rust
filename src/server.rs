@@ -7,7 +7,7 @@ use tokio::{
 };
 use tracing::info;
 
-use crate::command::RedisCommandParser;
+use crate::command::{RedisCommand, RedisCommandParser};
 use crate::redis::Redis;
 
 pub async fn start_server(redis: Arc<Mutex<Redis>>) -> Result<()> {
@@ -23,7 +23,7 @@ pub async fn start_server(redis: Arc<Mutex<Redis>>) -> Result<()> {
     let redis_clone = redis.lock().await.clone();
     if redis_clone.is_slave() {
         tokio::spawn(async move {
-            if let Err(e) = redis_clone.send_ping_to_master().await {
+            if let Err(e) = redis_clone.send_command_to_master(RedisCommand::Ping).await {
                 eprintln!("Error sending PING to master: {:?}", e);
             }
         });

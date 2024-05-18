@@ -33,13 +33,12 @@ impl Redis {
         master_port: &str,
     ) -> Self {
         let address = format!("{}:{}", host, port);
-        let redis = Redis {
+        Redis {
             info: RedisInfo::new(role, master_host, master_port),
             address,
             store: RedisStore::new(),
             slaves: Vec::new(),
-        };
-        redis
+        }
     }
 
     pub async fn add_slave(&mut self, slave_address: String) -> Result<(), anyhow::Error> {
@@ -60,85 +59,85 @@ impl Redis {
             );
             let slave_address = format!("{}:{}", slave, "6379"); // Assuming default Redis port 6379
 
-            match TcpStream::connect(&slave_address).await {
-                Ok(mut stream) => {
-                    if let Err(e) = stream.write_all(command_to_send.as_bytes()).await {
-                        debug!("Error sending command to slave at {}: {}", slave, e);
-                        continue;
-                    }
-
-                    let mut buffer = [0; 1024];
-                    match stream.read(&mut buffer).await {
-                        Ok(n) => {
-                            let response = std::str::from_utf8(&buffer[..n])?;
-                            if response.starts_with("+OK") {
-                                debug!("Command '{}' replicated to slave at {}", command, slave);
-                            } else {
-                                debug!(
-                                    "Failed to replicate command '{}' to slave at {}: Response {}",
-                                    command, slave, response
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            debug!("Error reading response from slave at {}: {}", slave, e);
-                        }
-                    }
-                }
-                Err(e) => {
-                    debug!("Error connecting to slave at {}: {}", slave, e);
-                }
+            if let Err(e) = self
+                .send_command_to_slave(&slave_address, &command_to_send)
+                .await
+            {
+                debug!("Error replicating command to slave at {}: {}", slave, e);
             }
         }
         Ok(())
     }
 
-    /// Sends a PING command to the master.
-    pub async fn send_ping_to_master(&self) -> Result<(), anyhow::Error> {
-        let master_address = format!("{}:{}", self.info.master_host, self.info.master_port);
-        let ping_command = RedisCommand::Ping.to_resp2();
-
-        let mut stream = TcpStream::connect(&master_address).await?;
-        stream.write_all(ping_command.as_bytes()).await?;
+    async fn send_command(&self, address: &str, command: &str) -> Result<String, anyhow::Error> {
+        let mut stream = TcpStream::connect(address).await?;
+        stream.write_all(command.as_bytes()).await?;
 
         let mut buffer = [0; 1024];
         let n = stream.read(&mut buffer).await?;
-        let response = std::str::from_utf8(&buffer[..n])?;
+        let response = std::str::from_utf8(&buffer[..n])?.to_string();
 
-        if response.starts_with("+PONG") {
-            info!("Successfully sent PING to master at {}", master_address);
+        Ok(response)
+    }
+
+    async fn send_command_to_slave(
+        &self,
+        slave_address: &str,
+        command: &str,
+    ) -> Result<(), anyhow::Error> {
+        let response = self.send_command(slave_address, command).await?;
+
+        if response.starts_with("+OK") {
+            debug!("Command replicated to slave at {}", slave_address);
         } else {
             debug!(
-                "Failed to send PING to master at {}: Response {}",
-                master_address, response
+                "Failed to replicate command to slave at {}: Response {}",
+                slave_address, response
             );
         }
         Ok(())
     }
 
+    /// Sends a command to the master.
+    pub async fn send_command_to_master(
+        &self,
+        command: RedisCommand,
+    ) -> Result<String, anyhow::Error> {
+        let master_address = format!("{}:{}", self.info.master_host, self.info.master_port);
+        let command_str = command.to_resp2();
+
+        let response = self.send_command(&master_address, &command_str).await?;
+
+        if response.starts_with("+") {
+            info!(
+                "Successfully sent command to master at {}: {}",
+                master_address, response
+            );
+        } else {
+            debug!(
+                "Failed to send command to master at {}: Response {}",
+                master_address, response
+            );
+        }
+        Ok(response)
+    }
+
     /// Starts a background worker that cleans up expired keys in the store.
     pub async fn expiry_worker(&self) {
         loop {
-            let next_expiry = self.store.next_expiration().await;
-            match next_expiry {
-                Some(expiry_time) => {
-                    let now = now_millis();
-                    if expiry_time > now {
-                        // Sleep until the next expiry time or wake up earlier if a new earlier expiry is set
-                        debug!("Sleeping until expiry time: {}", expiry_time);
-                        tokio::time::sleep_until(
-                            Instant::now() + Duration::from_millis(expiry_time - now),
-                        )
-                        .await;
-                    }
-                    // Clean expired keys after waking up
-                    self.store.clean_expired_keys().await;
+            if let Some(expiry_time) = self.store.next_expiration().await {
+                let now = now_millis();
+                if expiry_time > now {
+                    debug!("Sleeping until expiry time: {}", expiry_time);
+                    tokio::time::sleep_until(
+                        Instant::now() + Duration::from_millis(expiry_time - now),
+                    )
+                    .await;
                 }
-                None => {
-                    // If no expirations are set, sleep for a long duration (e.g., 60 secs) or until a new key is set
-                    debug!("No expirations set, sleeping for 10 seconds");
-                    tokio::time::sleep(Duration::from_secs(10)).await;
-                }
+                self.store.clean_expired_keys().await;
+            } else {
+                debug!("No expirations set, sleeping for 10 seconds");
+                tokio::time::sleep(Duration::from_secs(10)).await;
             }
         }
     }
@@ -158,24 +157,18 @@ impl Redis {
                 Some(value) => Ok(RedisCommandResponse::new(value)),
                 None => Ok(RedisCommandResponse::null()),
             },
-            RedisCommand::Info(section) => {
-                match section.as_deref() {
-                    // Use `as_deref` to convert Option<String> to Option<&str>
-                    Some("replication") => {
-                        let info_message = format!(
+            RedisCommand::Info(section) => match section.as_deref() {
+                Some("replication") => {
+                    let info_message = format!(
                             "role:{}\r\nmaster_host:{}\r\nmaster_port:{}\r\nmaster_replid:{}\r\nmaster_repl_offset:{}",
                             self.info.role, self.info.master_host, self.info.master_port, self.info.master_replid, self.info.master_repl_offset
                         );
-                        Ok(RedisCommandResponse::new(info_message))
-                    }
-                    _ => {
-                        // Handle unsupported sections
-                        Ok(RedisCommandResponse::_error(
-                            "Unsupported INFO section".to_string(),
-                        ))
-                    }
+                    Ok(RedisCommandResponse::new(info_message))
                 }
-            }
+                _ => Ok(RedisCommandResponse::_error(
+                    "Unsupported INFO section".to_string(),
+                )),
+            },
             RedisCommand::Set(key, value, expiry) => {
                 self.store.set(&key, &value, expiry).await;
                 Ok(RedisCommandResponse::new("OK".to_string()))
