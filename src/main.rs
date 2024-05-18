@@ -1,22 +1,22 @@
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
-use clap::Parser;
-use tokio::sync::Mutex;
-use tracing::Level;
-use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::Layer;
-use tracing_subscriber::{prelude::__tracing_subscriber_SubscriberExt, EnvFilter};
-
-mod cli;
-mod command;
-mod redis;
-mod server;
-mod utils;
+pub mod cli;
+pub mod command;
+pub mod redis;
+pub mod server;
+pub mod utils;
 
 use crate::cli::Cli;
-use crate::redis::Redis;
-use crate::server::start_server;
+use crate::redis::{master::Master, slave::Slave};
+use anyhow::{Context, Result};
+use clap::Parser;
+use redis::types::RedisRole;
+use server::{start_master_server, start_slave_server};
+use tokio::sync::Mutex;
+use tracing::Level;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{EnvFilter, Layer};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -37,13 +37,19 @@ async fn main() -> Result<()> {
     let role = cli.determine_role();
     let (master_host, master_port) = cli.get_master_info()?;
 
-    let redis = Arc::new(Mutex::new(Redis::new(
-        &cli.host,
-        &cli.port,
-        role,
-        &master_host,
-        &master_port,
-    )));
-
-    start_server(redis).await
+    match role {
+        RedisRole::Master => {
+            let redis = Arc::new(Mutex::new(Master::new(&cli.host, &cli.port)));
+            start_master_server(redis).await
+        }
+        RedisRole::Slave => {
+            let redis = Arc::new(Mutex::new(Slave::new(
+                &cli.host,
+                &cli.port,
+                &master_host,
+                &master_port,
+            )));
+            start_slave_server(redis).await
+        }
+    }
 }
