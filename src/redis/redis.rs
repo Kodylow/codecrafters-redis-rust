@@ -111,7 +111,7 @@ impl Redis {
     }
 
     /// Returns information about the server based on the requested section.
-    pub fn info(&self, section: &str) -> RedisCommandResponse {
+    pub fn _info(&self, section: &str) -> RedisCommandResponse {
         match section {
             "replication" => {
                 let info_message = format!(
