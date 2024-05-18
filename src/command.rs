@@ -232,8 +232,8 @@ fn handle_replconf_command<'a>(
     lines: &mut impl Iterator<Item = &'a str>,
     array_length: usize,
 ) -> Result<RedisCommand, anyhow::Error> {
-    if array_length < 3 {
-        anyhow::bail!("REPLCONF command requires at least two arguments");
+    if array_length < 2 {
+        anyhow::bail!("REPLCONF command requires at least one argument");
     }
     let args = (0..array_length - 1)
         .map(|_| RedisCommandParser::parse_argument(lines, "Argument"))
