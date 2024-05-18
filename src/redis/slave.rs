@@ -37,7 +37,7 @@ impl Slave {
             self.base.info.master_host, self.base.info.master_port
         );
         let command_str = command.to_resp2();
-
+        info!("Sending command to master {}", command_str);
         let response = self
             .base
             .send_command(&master_address, &command_str)
@@ -68,7 +68,7 @@ impl Slave {
 
         // Send REPLCONF command
         let replconf_response = self.replconf().await?;
-        info!("Successfully sent REPLCONF to master");
+        info!("Successfully sent REPLCONF to master {}", replconf_response);
 
         Ok(())
     }
