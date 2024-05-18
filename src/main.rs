@@ -57,10 +57,10 @@ async fn main() -> Result<()> {
         None => cli.role,
     };
     let (master_host, master_port) = if let Some(replica) = cli.replicaof {
-        let parts: Vec<&str> = replica.split(':').collect();
+        let parts: Vec<&str> = replica.split(' ').collect();
         if parts.len() != 2 {
             return Err(anyhow::anyhow!(
-                "Expected format for replicaof: <host>:<port>"
+                "Expected format for replicaof: \"<host> <port>\""
             ));
         }
         (parts[0].to_string(), parts[1].to_string())
