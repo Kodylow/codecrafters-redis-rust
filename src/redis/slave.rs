@@ -66,10 +66,10 @@ impl Slave {
         }
 
         // Send REPLCONF listening-port <port> command
-        let replconf_command = RedisCommand::Replconf(vec![format!(
-            "listening-port {}",
-            self.base.address.split(':').last().unwrap()
-        )]);
+        let listening_port = self.base.address.split(':').last().unwrap();
+        let replconf_command =
+            RedisCommand::Replconf(vec![format!("listening-port {}", listening_port)]);
+        debug!("Sending REPLCONF command: {:?}", replconf_command);
         let replconf_response = self.send_command_to_master(replconf_command).await?;
         if !replconf_response.starts_with("+") {
             return Err(anyhow::anyhow!("Failed to send REPLCONF to master"));
