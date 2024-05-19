@@ -6,12 +6,12 @@ use tokio::{
     net::TcpListener,
     sync::Mutex,
 };
-use tracing::info;
+use tracing::{error, info};
 
-use crate::{command::RedisCommandParser, redis::master::Master};
+use crate::{parser::RedisCommandParser, redis::master::Master};
 
 pub async fn start_master_server(redis: Arc<Mutex<Master>>) -> Result<()> {
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let listener = TcpListener::bind(&redis.lock().await.base.address).await?;
     let address = listener.local_addr()?;
     info!("Redis master server listening on {}", address);
 
@@ -33,19 +33,17 @@ pub async fn start_master_server(redis: Arc<Mutex<Master>>) -> Result<()> {
                 let buffer_str = match std::str::from_utf8(&buffer) {
                     Ok(s) => s,
                     Err(_) => {
-                        eprintln!("Invalid UTF-8 sequence");
+                        error!("Invalid UTF-8 sequence");
                         continue;
                     }
                 }
                 .to_string();
                 buffer.fill(0);
 
-                info!("Received command in buffer: {:?}", buffer_str);
-
                 let command = match RedisCommandParser::parse(&buffer_str) {
                     Ok(cmd) => cmd,
                     Err(e) => {
-                        eprintln!("Invalid command: {:?}", e);
+                        error!("Invalid command: {:?}", e);
                         continue;
                     }
                 };
@@ -57,7 +55,7 @@ pub async fn start_master_server(redis: Arc<Mutex<Master>>) -> Result<()> {
                         .replicate_to_slaves(&buffer_str)
                         .await
                     {
-                        eprintln!("Error replicating to slaves: {:?}", e);
+                        error!("Error replicating to slaves: {:?}", e);
                         continue;
                     }
                 }
@@ -65,12 +63,13 @@ pub async fn start_master_server(redis: Arc<Mutex<Master>>) -> Result<()> {
                 let response = match redis_clone.lock().await.handle_command(command).await {
                     Ok(resp) => resp,
                     Err(e) => {
-                        eprintln!("Error handling command: {:?}", e);
+                        error!("Error handling command: {:?}", e);
                         continue;
                     }
                 };
+                info!("Sending response: {:?}", response);
                 if let Err(e) = stream.write_all(response.message.as_bytes()).await {
-                    eprintln!("Error writing response: {:?}", e);
+                    error!("Error writing response: {:?}", e);
                     continue;
                 }
             }
@@ -79,7 +78,7 @@ pub async fn start_master_server(redis: Arc<Mutex<Master>>) -> Result<()> {
 }
 
 pub async fn start_slave_server(redis: Arc<Mutex<Slave>>) -> Result<()> {
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let listener = TcpListener::bind(&redis.lock().await.base.address).await?;
     let address = listener.local_addr()?;
     info!("Redis slave server listening on {}", address);
 
@@ -87,7 +86,7 @@ pub async fn start_slave_server(redis: Arc<Mutex<Slave>>) -> Result<()> {
     let redis_clone = redis.lock().await.clone();
     tokio::spawn(async move {
         if let Err(e) = redis_clone.handshake_with_master().await {
-            eprintln!("Error handshaking with master: {:?}", e);
+            error!("Error handshaking with master: {:?}", e);
             return;
         }
     });
@@ -102,13 +101,15 @@ pub async fn start_slave_server(redis: Arc<Mutex<Slave>>) -> Result<()> {
                 if n == 0 {
                     break;
                 }
-                let buffer_str = match std::str::from_utf8(&buffer) {
+                let buffer_str = match std::str::from_utf8(&buffer[..n]) {
                     Ok(s) => s,
                     Err(_) => {
                         eprintln!("Invalid UTF-8 sequence");
                         continue;
                     }
                 };
+                info!("Received buffer: {:?}", buffer_str);
+
                 let command = match RedisCommandParser::parse(buffer_str) {
                     Ok(cmd) => cmd,
                     Err(e) => {
@@ -124,6 +125,7 @@ pub async fn start_slave_server(redis: Arc<Mutex<Slave>>) -> Result<()> {
                         continue;
                     }
                 };
+                info!("Sending response: {:?}", response);
                 if let Err(e) = stream.write_all(response.message.as_bytes()).await {
                     eprintln!("Error writing response: {:?}", e);
                     continue;

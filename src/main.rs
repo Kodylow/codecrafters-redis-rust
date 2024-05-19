@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 pub mod cli;
 pub mod command;
+pub mod parser;
 pub mod redis;
 pub mod server;
 pub mod utils;
