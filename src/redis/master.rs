@@ -154,6 +154,7 @@ impl RedisServer for Master {
                 self.replconf(data).await?;
                 Ok(RedisCommandResponse::new("OK".to_string()))
             }
+            RedisCommand::Ok => Ok(RedisCommandResponse::new("OK".to_string())),
         }
     }
 }

@@ -85,7 +85,7 @@ pub async fn start_slave_server(redis: Arc<Mutex<Slave>>) -> Result<()> {
     // Handshake with master
     let redis_clone = redis.lock().await.clone();
     tokio::spawn(async move {
-        if let Err(e) = redis_clone.handshake_with_master().await {
+        if let Err(e) = redis_clone.handshake().await {
             error!("Error handshaking with master: {:?}", e);
             return;
         }

@@ -3,7 +3,7 @@ use std::fmt::{Display, Formatter};
 use serde::{Deserialize, Serialize};
 
 /// Enum for administrative commands
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum AdminCommand {
     Replicate(String),
@@ -11,7 +11,7 @@ pub enum AdminCommand {
 }
 
 /// Enum for supported Redis protocol commands
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum RedisCommand {
     Ping,
@@ -22,6 +22,7 @@ pub enum RedisCommand {
     Info(Option<String>),
     Admin(AdminCommand),
     Replconf(Vec<String>),
+    Ok,
 }
 
 impl Display for RedisCommand {
@@ -47,6 +48,7 @@ impl Display for RedisCommand {
                 AdminCommand::AddSlave(data) => write!(f, "ADDSLAVE {}", data),
             },
             RedisCommand::Replconf(data) => write!(f, "REPLCONF {}", data.join(" ")),
+            RedisCommand::Ok => write!(f, "OK"),
         }
     }
 }
@@ -72,10 +74,18 @@ pub struct RedisCommandResponse {
     pub message: String,
 }
 
+impl ToString for RedisCommandResponse {
+    fn to_string(&self) -> String {
+        self.message.clone()
+    }
+}
+
 impl RedisCommandResponse {
     pub fn new(message: String) -> Self {
         let formatted_message = if message.is_empty() {
             "$-1\r\n".to_string()
+        } else if message == "OK" {
+            "+OK\r\n".to_string()
         } else {
             format!("${}\r\n{}\r\n", message.len(), message)
         };

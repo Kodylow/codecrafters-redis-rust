@@ -45,24 +45,24 @@ impl Slave {
             self.base.info.master_host, self.base.info.master_port
         );
         let command_str = command.to_resp2();
-        info!(
-            "Sending command to master {}: {}",
-            master_address, command_str
-        );
+
+        info!("Sending command to master: {}", command_str);
+
         let response = self
             .base
             .send_command(&master_address, &command_str)
             .await?;
 
-        if !response.starts_with("+") {
+        if response != RedisCommandResponse::new("OK".to_string()).to_string() {
             error!("Failed to send command to master, response: {}", response);
             return Err(anyhow::anyhow!("Failed to send command to master"));
         }
+
         Ok(response)
     }
 
     /// Performs the handshake with the master.
-    pub async fn handshake_with_master(&self) -> Result<(), anyhow::Error> {
+    pub async fn handshake(&self) -> Result<(), anyhow::Error> {
         let master_address = format!(
             "{}:{}",
             self.base.info.master_host, self.base.info.master_port
@@ -85,13 +85,15 @@ impl Slave {
 
         // Parse the response using RedisCommandParser
         let parsed_response = RedisCommandParser::parse(response)?;
-
         if let RedisCommand::Pong = parsed_response {
             info!("Handshake with master successful");
-            Ok(())
         } else {
-            Err(anyhow::anyhow!("Failed to receive PONG from master"))
+            return Err(anyhow::anyhow!("Failed to receive PONG from master"));
         }
+
+        self.replconf().await?;
+
+        Ok(())
     }
 
     /// Sends a REPLCONF command to the master.
@@ -105,18 +107,11 @@ impl Slave {
             .context("Invalid port number")?;
         let listening_port_command =
             RedisCommand::Replconf(vec!["listening-port".to_string(), port.to_string()]);
-        let listening_port_response = self.send_command_to_master(listening_port_command).await?;
-        if !listening_port_response.starts_with("+OK") {
-            return Err(anyhow::anyhow!("Failed to send REPLCONF listening-port"));
-        }
+        self.send_command_to_master(listening_port_command).await?;
 
-        // Send REPLCONF capa psync2
         let capa_psync2_command =
             RedisCommand::Replconf(vec!["capa".to_string(), "psync2".to_string()]);
-        let capa_psync2_response = self.send_command_to_master(capa_psync2_command).await?;
-        if !capa_psync2_response.starts_with("+OK") {
-            return Err(anyhow::anyhow!("Failed to send REPLCONF capa psync2"));
-        }
+        let _ = self.send_command_to_master(capa_psync2_command).await?;
 
         Ok("REPLCONF commands sent successfully".to_string())
     }
@@ -178,6 +173,7 @@ impl RedisServer for Slave {
                     "REPLCONF command not supported on slave".to_string(),
                 ))
             }
+            RedisCommand::Ok => Ok(RedisCommandResponse::new("OK".to_string())),
         }
     }
 }
