@@ -46,7 +46,9 @@ impl Slave {
             .send_command(&master_address, &command_str)
             .await?;
 
-        if response != RedisCommandResponse::new("OK".to_string()).to_string() {
+        if response != RedisCommandResponse::new("OK".to_string()).to_string()
+            && response != RedisCommandResponse::new("PONG".to_string()).to_string()
+        {
             error!("Failed to send command to master, response: {}", response);
             return Err(anyhow::anyhow!("Failed to send command to master"));
         }
@@ -59,9 +61,9 @@ impl Slave {
         // Send PING command to master
         info!("Sending PING command to master");
         let response = self.send_command_to_master(RedisCommand::Ping).await?;
-        if response != RedisCommandResponse::new("PONG".to_string()).to_string() {
-            return Err(anyhow::anyhow!("Failed to send PING command to master"));
-        }
+
+        // Send the REPLCONF command to the master
+        let response = self.replconf().await?;
 
         Ok(())
     }
