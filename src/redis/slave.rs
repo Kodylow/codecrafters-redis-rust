@@ -1,14 +1,7 @@
 use anyhow::Context;
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
-};
 use tracing::{error, info};
 
-use crate::{
-    command::{AdminCommand, RedisCommand, RedisCommandResponse},
-    parser::RedisCommandParser,
-};
+use crate::command::{AdminCommand, RedisCommand, RedisCommandResponse};
 
 use super::{
     base::{BaseServer, RedisServer},
@@ -63,35 +56,12 @@ impl Slave {
 
     /// Performs the handshake with the master.
     pub async fn handshake(&self) -> Result<(), anyhow::Error> {
-        let master_address = format!(
-            "{}:{}",
-            self.base.info.master_host, self.base.info.master_port
-        );
-        let mut stream = TcpStream::connect(&master_address).await?;
-        info!("Connected to master at {}", master_address);
-
         // Send PING command to master
-        let ping_command = RedisCommand::Ping.to_resp2();
-        stream.write_all(ping_command.as_bytes()).await?;
-
-        // Read response from master
-        let mut buffer = vec![0; 1024];
-        let n = stream.read(&mut buffer).await?;
-        if n == 0 {
-            return Err(anyhow::anyhow!("No response from master"));
+        info!("Sending PING command to master");
+        let response = self.send_command_to_master(RedisCommand::Ping).await?;
+        if response != RedisCommandResponse::new("PONG".to_string()).to_string() {
+            return Err(anyhow::anyhow!("Failed to send PING command to master"));
         }
-
-        let response = std::str::from_utf8(&buffer[..n])?;
-
-        // Parse the response using RedisCommandParser
-        let parsed_response = RedisCommandParser::parse(response)?;
-        if let RedisCommand::Pong = parsed_response {
-            info!("Handshake with master successful");
-        } else {
-            return Err(anyhow::anyhow!("Failed to receive PONG from master"));
-        }
-
-        self.replconf().await?;
 
         Ok(())
     }
