@@ -99,6 +99,7 @@ impl RedisServer for Slave {
         match command {
             RedisCommand::Ping => Ok(RedisCommandResponse::new("PONG".to_string())),
             RedisCommand::Pong => {
+                info!("Slave received PONG command");
                 let replconf_response = self.replconf().await?;
                 Ok(RedisCommandResponse::new(replconf_response))
             }
